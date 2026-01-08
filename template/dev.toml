@@ -1,0 +1,7 @@
+dependencies = [
+    "mne>=1.8.0",
+]
+
+
+[tool.uv.sources]
+mne = { path = "../../mne-python", editable = true }
