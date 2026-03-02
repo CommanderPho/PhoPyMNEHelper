@@ -28,8 +28,16 @@ ast-grep --lang python "PhoPyMNEHelper\src\phopymnehelper" --pattern 'from phoof
 
 
 
-ast-grep --lang python "PhoPyMNEHelper\src\phopymnehelper" --pattern 'from phoofflineeeganalysis.analysis.historical_data' --rewrite 'from phopymnehelper.historical_data' -U
+ast-grep --lang python "PhoPyMNEHelper\src\phopymnehelper" --pattern 'from phoofflineeeganalysis.analysis.' --rewrite 'from phopymnehelper.' -U
 
+
+r"**/PhoPyMNEHelper\src\phopymnehelper/*.py"
+"from phoofflineeeganalysis.analysis."
+"from phopymnehelper."
+
+r"**/PhoPyMNEHelper\src\phopymnehelper/*.py"
+"from phoofflineeeganalysis."
+"from phopymnehelper."
 
 
 ```
