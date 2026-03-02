@@ -38,7 +38,7 @@ def export_eeg_dataset_to_airtable(raw: mne.io.BaseRaw,
         
     Usage:
         from phopylslhelper.core.xdf_files import LabRecorderXDF
-        from phoofflineeeganalysis.analysis.airtable_export import export_eeg_dataset_to_airtable
+        from phopymnehelper.exporters.AirTable_Exporter import export_eeg_dataset_to_airtable
         
         # Load XDF file
         xdf_file = Path("path/to/file.xdf")
