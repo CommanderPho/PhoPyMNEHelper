@@ -580,169 +580,188 @@ class LabRecorderXDF:
         all_annotations_objs: List[mne.Annotations] = []
 
         for stream in self.xdf_streams:
-            name: str = stream['info']['name'][0]
-            a_modality: DataModalityType = self.stream_name_to_modality_dict.get(name, None)
-            if a_modality is not None:
-                a_modality = a_modality.value
-            if a_modality not in self.datasets_dict:
-                self.datasets_dict[a_modality] = []
+            ## try/catch so that if a single stream fails or is mangled/unexpected that whole xdf isn't aborted/discarded:
+            try:
+                ## trying this tream...
+                name: str = stream['info']['name'][0]
+                a_modality: DataModalityType = self.stream_name_to_modality_dict.get(name, None)
+                if a_modality is not None:
+                    a_modality = a_modality.value
+                if a_modality not in self.datasets_dict:
+                    self.datasets_dict[a_modality] = []
 
-            print(f'======== STREAM "{name}":')
-            
-            fs = float(stream['info']['nominal_srate'][0])
-            stream_info_dict: Dict = {'name': name, 'fs': fs}
-
-            # sample_count: int = stream['footer']['info']['sample_count'][0]
-
-            if (len(stream['time_series']) == 0):
-                print(f'\tWARN: skipping empty stream: "{name}"')
-                continue ## skip this stream
-            elif (name in self.skipped_stream_names):
-                print(f'\tWARN: skipping "{name}" with name in skipped_stream_names: {self.skipped_stream_names}')
-                continue ## skip this stream
-            else:
-                n_samples, n_channels = np.shape(stream['time_series'])
-                stream_info_dict.update(**{'n_samples': n_samples, 'n_channels': n_channels})
-                ## stream info keys:
-                for a_key in ('type', 'stream_id', 'effective_srate', 'hostname', 'source_id', 'channel_count', 'channel_format', 'type', 'created_at', 'source_id', 'version', 'uid'):
-                    a_value = stream['info'].get(a_key, None)
-                    a_value = unwrap_single_element_listlike_if_needed(a_value)
-                    if a_value is not None:
-                        stream_info_dict[a_key] = a_value
-
-                ## stream footer:
-                for a_key in ('first_timestamp', 'last_timestamp', 'sample_count'):
-                    a_value = stream.get('footer', {}).get('info', {}).get(a_key, None)
-                    a_value = unwrap_single_element_listlike_if_needed(a_value)
-                    if a_value is not None:
-                        stream_info_dict[a_key] = float(a_value)
-
-                ## Update the timestamp keys to float values, and the create a datetime column by adding them to the `file_datetime`
-                timestamp_keys = ('created_at', 'first_timestamp', 'last_timestamp')
-                for a_key in timestamp_keys:
-                    if stream_info_dict.get(a_key, None) is not None:
-                        a_ts_value: float = float(stream_info_dict[a_key]) # ['169993.1081304000']
-                        a_ts_value_dt: datetime = self.file_datetime + pd.Timedelta(nanoseconds=a_ts_value)
-                        a_dt_key: str = f'{a_key}_dt'
-                        stream_info_dict[a_dt_key] = a_ts_value_dt
-                        print(f'\t{a_dt_key}: {readable_dt_str(a_ts_value_dt)}')
-                        
-
-                ## try to get the special marker timestamp helpers:
-                desc_info_dict = dict(stream['info'].get('desc', [{}])[0])
-                stream_info_dict = EasyTimeSyncParsingMixin.parse_and_add_lsl_outlet_info_from_desc(desc_info_dict=desc_info_dict, stream_info_dict=stream_info_dict, should_fail_on_missing=False) ## Returns the updated `stream_info_dict`
+                print(f'======== STREAM "{name}":')
                 
-                ## Add stream info dict to the stream_infos list:
-                stream_infos.append(stream_info_dict)
+                fs = float(stream['info']['nominal_srate'][0])
+                stream_info_dict: Dict = {'name': name, 'fs': fs}
 
-                ## Process Data:
-                stream_first_timestamp: float = float(stream['footer']['info']['first_timestamp'][0]) # 29605.4462984
-                stream_last_timestamp: float = float(stream['footer']['info']['last_timestamp'][0]) # 30373.1166288
+                # sample_count: int = stream['footer']['info']['sample_count'][0]
 
-                stream_first_timestamp = pd.Timedelta(seconds=stream_first_timestamp)
-                stream_last_timestamp = pd.Timedelta(seconds=stream_last_timestamp)
-
-                stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
-                if debug_print:
-                    print(f'\tstream_approx_dur_sec: {stream_approx_dur_sec}')
-
-                stream_timestamps = deepcopy(np.array(stream['time_stamps']))
-                stream_clock_times = deepcopy(np.array(stream['clock_times']))
-
-                if debug_print:
-                    print(f'\tstream_timestamps: {stream_timestamps.tolist()}')
-                    print(f'\tstream_clock_times: {stream_clock_times.tolist()}')
-
-                zeroed_stream_timestamps = deepcopy(stream_timestamps)
-                zeroed_stream_clock_times = deepcopy(stream_clock_times)
-
-                if len(zeroed_stream_timestamps) > 0:
-                    assert stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None
-                    # zeroed_stream_timestamps = zeroed_stream_timestamps - zeroed_stream_timestamps[0] ## subtract out the first timestamp
-                    zeroed_stream_timestamps = zeroed_stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds']
-                if len(zeroed_stream_clock_times) > 0:
-                    zeroed_stream_clock_times = zeroed_stream_clock_times - zeroed_stream_clock_times[0] ## subtract out the first timestamp
-                
-                zeroed_stream_timestamps_dt = np.array([pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## convert to timedelta (for no reason)
-                # stream_datetimes = np.array([stream_info_dict.get('recording_start_datetime', file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## List[datetime]
-                assert stream_info_dict.get('stream_start_datetime', None) is not None
-                stream_datetimes = np.array([stream_info_dict.get('stream_start_datetime', self.file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## compatibility
-
-                ## OUTPUTS: stream_datetimes
-
-                ## post-zeroed:
-                if debug_print:
-                    print(f'\tpost-zeroed stream_timestamps: {stream_timestamps.tolist()}')
-                    print(f'\tpost-zeroed stream_clock_times: {stream_clock_times.tolist()}')
-
-                ## STREAM OUTPUTS: stream_timestamps, stream_clock_times, zeroed_stream_timestamps, zeroed_stream_clock_times, zeroed_stream_timestamps_dt, stream_datetimes
-                # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
-                # all_annotations.append(a_raw_df)
-
-                ## UPDATE: `streams_timestamp_dfs`
-                streams_timestamp_dfs[name] = pd.DataFrame(dict(stream_timestamps=stream_timestamps,
-                    zeroed_stream_timestamps=zeroed_stream_timestamps, zeroed_stream_timestamps_dt=zeroed_stream_timestamps_dt,
-                    # stream_clock_times=stream_clock_times,  zeroed_stream_clock_times=zeroed_stream_clock_times,
-                    stream_datetimes = stream_datetimes,
-                ))
-
-
-                # ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
-                # if not should_load_full_file_data:
-                #     continue
-
-                if (fs == 0):  
-                    # irregular event streams
-                    ch_names = ['TextLogger_Markers']
-                    ch_types = ['misc']
-                    logger_strings = [unwrap_single_element_listlike_if_needed(v) for v in stream['time_series']]
-                    assert len(stream_timestamps) == len(logger_strings), f"len(stream_timestamps): {len(stream_timestamps)} != len(logger_strings): {len(logger_strings)}"
-
-                    ## check
-                    assert ((stream_info_dict['created_at_dt'] - self.file_datetime).total_seconds() < (90.0 * 60.0)) # should be less than 10 seconds between the file start and the logging stream (usually...)
-
-                    # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, converted_dt=converted_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
-                    a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=stream_datetimes, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
-                    all_annotations_dfs.append(a_raw_df)
-
-                    ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
-                    raw = mne.Annotations(onset=zeroed_stream_timestamps, duration=([0.0] * len(zeroed_stream_timestamps)), description=logger_strings, orig_time=stream_info_dict['stream_start_datetime']) ## set orig_time=None
-                    
-                    ## UPDATE `raws` and `raws_dict` with the new raw object:
-                    self.datasets.append(raw)
-                    all_annotations_objs.append(raw)
-
-                    if a_modality is not None:
-                        self.datasets_dict[a_modality].append(raw)
-
+                if (len(stream['time_series']) == 0):
+                    print(f'\tWARN: skipping empty stream: "{name}"')
+                    continue ## skip this stream
+                elif (name in self.skipped_stream_names):
+                    print(f'\tWARN: skipping "{name}" with name in skipped_stream_names: {self.skipped_stream_names}')
+                    continue ## skip this stream
                 else:
-                    ## fixed sampling rate streams:
-                    _channels_dict = benedict(stream['info']['desc'][0]['channels'][0])
-                    channels_df: pd.DataFrame = pd.DataFrame.from_records([{k:v[0] for k, v in ch_v.items()} for ch_v in _channels_dict.flatten()['channel']])
-                    data = np.array(stream['time_series']).T
-                    if (stream_info_dict['type'] == 'EEG'):
-                        pass
-                    # ch_names = [f"{name}_{i}" for i in range(data.shape[0])]
-                    # ch_types = ["eeg"] * data.shape[0]  # adjust depending on stream type
-                    ch_names = channels_df['label'].to_list()
-                    ch_types = [self.lab_recorder_to_mne_to_type_dict[v] for v in channels_df['type']]
+                    n_samples, n_channels = np.shape(stream['time_series'])
+                    stream_info_dict.update(**{'n_samples': n_samples, 'n_channels': n_channels})
+                    ## stream info keys:
+                    for a_key in ('type', 'stream_id', 'effective_srate', 'hostname', 'source_id', 'channel_count', 'channel_format', 'type', 'created_at', 'source_id', 'version', 'uid'):
+                        a_value = stream['info'].get(a_key, None)
+                        a_value = unwrap_single_element_listlike_if_needed(a_value)
+                        if a_value is not None:
+                            stream_info_dict[a_key] = a_value
+
+                    ## stream footer:
+                    for a_key in ('first_timestamp', 'last_timestamp', 'sample_count'):
+                        a_value = stream.get('footer', {}).get('info', {}).get(a_key, None)
+                        a_value = unwrap_single_element_listlike_if_needed(a_value)
+                        if a_value is not None:
+                            stream_info_dict[a_key] = float(a_value)
+
+                    ## Update the timestamp keys to float values, and the create a datetime column by adding them to the `file_datetime`
+                    timestamp_keys = ('created_at', 'first_timestamp', 'last_timestamp')
+                    for a_key in timestamp_keys:
+                        if stream_info_dict.get(a_key, None) is not None:
+                            a_ts_value: float = float(stream_info_dict[a_key]) # ['169993.1081304000']
+                            a_ts_value_dt: datetime = self.file_datetime + pd.Timedelta(nanoseconds=a_ts_value)
+                            a_dt_key: str = f'{a_key}_dt'
+                            stream_info_dict[a_dt_key] = a_ts_value_dt
+                            print(f'\t{a_dt_key}: {readable_dt_str(a_ts_value_dt)}')
+                            
+
+                    ## try to get the special marker timestamp helpers:
+                    desc_info_dict = dict(stream['info'].get('desc', [{}])[0])
+                    stream_info_dict = EasyTimeSyncParsingMixin.parse_and_add_lsl_outlet_info_from_desc(desc_info_dict=desc_info_dict, stream_info_dict=stream_info_dict, should_fail_on_missing=False) ## Returns the updated `stream_info_dict`
                     
-                    info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types=ch_types)
-                    info = info.set_meas_date(self.file_datetime)
-                    info['description'] = self.xdf_file_path.as_posix()
-                    info['device_info'] = {'type':'USB', 'model':'EpocX', 'serial': '', 'site':'pho', 'stream_info': {}} # #TODO 2025-09-22 08:51: - [ ] Add Hostname<USB> or Hostname<BLE>
-                    # info['temp']
-                    ## add in the 'stream_info' properties:
-                    info['device_info']['stream_info'] = {}
-                    for k, v in stream_info_dict.items():
-                        info['device_info']['stream_info'][k] = deepcopy(v)
+                    ## Add stream info dict to the stream_infos list:
+                    stream_infos.append(stream_info_dict)
 
-                    raw = mne.io.RawArray(data, info) ## also have , first_samp=0
+                    ## Process Data:
+                    stream_first_timestamp: float = float(stream['footer']['info']['first_timestamp'][0]) # 29605.4462984
+                    stream_last_timestamp: float = float(stream['footer']['info']['last_timestamp'][0]) # 30373.1166288
 
-                    ## UPDATE `raws` and `raws_dict` with the new raw object:
-                    self.datasets.append(raw)
-                    if a_modality is not None:
-                        self.datasets_dict[a_modality].append(raw)
+                    stream_first_timestamp = pd.Timedelta(seconds=stream_first_timestamp)
+                    stream_last_timestamp = pd.Timedelta(seconds=stream_last_timestamp)
+
+                    stream_approx_dur_sec: float = (stream_last_timestamp - stream_first_timestamp).total_seconds()
+                    if debug_print:
+                        print(f'\tstream_approx_dur_sec: {stream_approx_dur_sec}')
+
+                    stream_timestamps = deepcopy(np.array(stream['time_stamps']))
+                    stream_clock_times = deepcopy(np.array(stream['clock_times']))
+
+                    if debug_print:
+                        print(f'\tstream_timestamps: {stream_timestamps.tolist()}')
+                        print(f'\tstream_clock_times: {stream_clock_times.tolist()}')
+
+                    zeroed_stream_timestamps = deepcopy(stream_timestamps)
+                    zeroed_stream_clock_times = deepcopy(stream_clock_times)
+
+                    if len(zeroed_stream_timestamps) > 0:
+                        assert stream_info_dict.get('stream_start_lsl_local_offset_seconds', None) is not None
+                        # zeroed_stream_timestamps = zeroed_stream_timestamps - zeroed_stream_timestamps[0] ## subtract out the first timestamp
+                        zeroed_stream_timestamps = zeroed_stream_timestamps - stream_info_dict['stream_start_lsl_local_offset_seconds']
+                    if len(zeroed_stream_clock_times) > 0:
+                        zeroed_stream_clock_times = zeroed_stream_clock_times - zeroed_stream_clock_times[0] ## subtract out the first timestamp
+                    
+                    zeroed_stream_timestamps_dt = np.array([pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## convert to timedelta (for no reason)
+                    # stream_datetimes = np.array([stream_info_dict.get('recording_start_datetime', file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## List[datetime]
+                    assert stream_info_dict.get('stream_start_datetime', None) is not None
+                    stream_datetimes = np.array([stream_info_dict.get('stream_start_datetime', self.file_datetime) + pd.Timedelta(seconds=v) for v in zeroed_stream_timestamps]) ## compatibility
+
+                    ## OUTPUTS: stream_datetimes
+
+                    ## post-zeroed:
+                    if debug_print:
+                        print(f'\tpost-zeroed stream_timestamps: {stream_timestamps.tolist()}')
+                        print(f'\tpost-zeroed stream_clock_times: {stream_clock_times.tolist()}')
+
+                    ## STREAM OUTPUTS: stream_timestamps, stream_clock_times, zeroed_stream_timestamps, zeroed_stream_clock_times, zeroed_stream_timestamps_dt, stream_datetimes
+                    # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
+                    # all_annotations.append(a_raw_df)
+
+                    ## UPDATE: `streams_timestamp_dfs`
+                    streams_timestamp_dfs[name] = pd.DataFrame(dict(stream_timestamps=stream_timestamps,
+                        zeroed_stream_timestamps=zeroed_stream_timestamps, zeroed_stream_timestamps_dt=zeroed_stream_timestamps_dt,
+                        # stream_clock_times=stream_clock_times,  zeroed_stream_clock_times=zeroed_stream_clock_times,
+                        stream_datetimes = stream_datetimes,
+                    ))
+
+
+                    # ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
+                    # if not should_load_full_file_data:
+                    #     continue
+
+                    if (fs == 0):  
+                        # irregular event streams
+                        ch_names = ['TextLogger_Markers']
+                        ch_types = ['misc']
+                        logger_strings = [unwrap_single_element_listlike_if_needed(v) for v in stream['time_series']]
+                        assert len(stream_timestamps) == len(logger_strings), f"len(stream_timestamps): {len(stream_timestamps)} != len(logger_strings): {len(logger_strings)}"
+
+                        ## check
+                        assert ((stream_info_dict['created_at_dt'] - self.file_datetime).total_seconds() < (90.0 * 60.0)) # should be less than 10 seconds between the file start and the logging stream (usually...)
+
+                        # a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=zeroed_stream_timestamps, onset_dt=zeroed_stream_timestamps_dt, converted_dt=converted_dt, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
+                        a_raw_df: pd.DataFrame = pd.DataFrame(dict(onset=stream_datetimes, duration=([0.0] * len(zeroed_stream_timestamps_dt)), description=logger_strings))
+                        all_annotations_dfs.append(a_raw_df)
+
+                        #TODO 2026-03-02 18:00: - [ ] See if the local import of MNE fixes this tz=UTC != tz=UTC issue:
+                        from datetime import timezone
+
+                        # If it might be zoneinfo/pytz/other UTC:
+                        orig_time = stream_info_dict['stream_start_datetime']
+                        if orig_time is not None and orig_time.tzinfo is not None:
+                            orig_time = orig_time.astimezone(timezone.utc)
+                        # raw = mne.Annotations(..., orig_time=orig_time)
+
+                        ## In lightweight mode, only collect bare stream metadata and skip heavy data processing:
+                        raw = mne.Annotations(onset=zeroed_stream_timestamps, duration=([0.0] * len(zeroed_stream_timestamps)), description=logger_strings, orig_time=orig_time) ## set orig_time=None # #TODO 2026-03-02 17:33: - [ ] this is raising and aborting the whole function (just one stream, the 'TextLogger_Markers' stream
+                        ## #TODO 2026-03-02 17:44: - [ ] stream_info_dict['stream_start_datetime']: `datetime.datetime(2026, 3, 1, 2, 9, 18, tzinfo=<UTC>)` is the problem, it's raising "ValueError: Date must be datetime object in UTC: datetime.datetime(2026, 3, 1, 2, 9, 18, tzinfo=<UTC>)"
+                        ## UPDATE `raws` and `raws_dict` with the new raw object:
+                        self.datasets.append(raw)
+                        all_annotations_objs.append(raw)
+
+                        if a_modality is not None:
+                            self.datasets_dict[a_modality].append(raw)
+
+                    else:
+                        ## fixed sampling rate streams:
+                        _channels_dict = benedict(stream['info']['desc'][0]['channels'][0])
+                        channels_df: pd.DataFrame = pd.DataFrame.from_records([{k:v[0] for k, v in ch_v.items()} for ch_v in _channels_dict.flatten()['channel']])
+                        data = np.array(stream['time_series']).T
+                        if (stream_info_dict['type'] == 'EEG'):
+                            pass
+                        # ch_names = [f"{name}_{i}" for i in range(data.shape[0])]
+                        # ch_types = ["eeg"] * data.shape[0]  # adjust depending on stream type
+                        ch_names = channels_df['label'].to_list()
+                        ch_types = [self.lab_recorder_to_mne_to_type_dict[v] for v in channels_df['type']]
+                        
+                        info = mne.create_info(ch_names=ch_names, sfreq=fs, ch_types=ch_types)
+                        info = info.set_meas_date(self.file_datetime)
+                        info['description'] = self.xdf_file_path.as_posix()
+                        info['device_info'] = {'type':'USB', 'model':'EpocX', 'serial': '', 'site':'pho', 'stream_info': {}} # #TODO 2025-09-22 08:51: - [ ] Add Hostname<USB> or Hostname<BLE>
+                        # info['temp']
+                        ## add in the 'stream_info' properties:
+                        info['device_info']['stream_info'] = {}
+                        for k, v in stream_info_dict.items():
+                            info['device_info']['stream_info'][k] = deepcopy(v)
+
+                        raw = mne.io.RawArray(data, info) ## also have , first_samp=0
+
+                        ## UPDATE `raws` and `raws_dict` with the new raw object:
+                        self.datasets.append(raw)
+                        if a_modality is not None:
+                            self.datasets_dict[a_modality].append(raw)
+
+            except Exception as e:
+                print(f'\tERROR: stream: {stream} failed with error: {e}. Continuing with the remainder of xdf_streams...')
+                continue
+
+            # raise e
+
         ## END for stream in streams...
 
         stream_infos: pd.DataFrame = pd.DataFrame.from_records(stream_infos)
@@ -892,91 +911,12 @@ class LabRecorderXDF:
             raws = _obj.datasets
             raws_dict = _obj.datasets_dict
         else:
-            stream_infos, streams_timestamp_dfs, datasets, datasets_dict = _obj.perform_load_xdf_streams(debug_print=debug_print)
+            stream_infos, streams_timestamp_dfs, datasets, datasets_dict = _obj.perform_load_xdf_streams(debug_print=debug_print) # #TODO 2026-03-02 17:19: - [ ] ValueError: Date must be datetime object in UTC: datetime.datetime(2026, 3, 1, 2, 9, 18, tzinfo=<UTC>)
             raws = datasets
             raws_dict = datasets_dict
 
-
         return _obj
-        
 
-    @classmethod
-    def save_post_processed_to_fif(cls, raws_dict, a_xdf_file: Path, labRecorder_PostProcessed_path: Path, export_mat: bool=True):
-        """ 
-
-        eeg_raw, a_lab_recorder_filepath = LabRecorderXDF.save_post_processed_to_fif(
-            raws_dict=raws_dict,
-            a_xdf_file=a_xdf_file,
-            labRecorder_PostProcessed_path=sso.eeg_analyzed_parent_export_path.joinpath(f'LabRecorder_PostProcessed'),
-        )
-
-        LabRecorder_Apogee_2025-09-18T15-18-39
-        LabRecorder_2025-09-19T02-22-10.mat
-        
-                 
-        
-        """
-        ## When done processing the entire LabRecorder.xdf, save EEG data (with all
-        ## annotations and such added) to new files. Supports multiple EEG devices
-        ## per XDF by writing one output per merged EEG dataset.
-        eeg_raws = raws_dict.get(DataModalityType.EEG.value, [])
-        if len(eeg_raws) == 0:
-            print(f'WARN: save_post_processed_to_fif found no EEG streams in "{a_xdf_file.as_posix()}". Skipping.')
-            return None, None
-
-        # Merge streams by device (one Raw per physical device)
-        merged_eeg_raws, merge_meta = cls.merge_eeg_streams_by_device(
-            eeg_raws=eeg_raws, strict_merge=False, debug_print=False
-        )
-        if len(merged_eeg_raws) == 0:
-            print(f'WARN: save_post_processed_to_fif could not produce any merged EEG datasets for "{a_xdf_file.as_posix()}". Skipping.')
-            return None, None
-
-        labRecorder_PostProcessed_path.mkdir(exist_ok=True)
-
-        a_lab_recorder_filename: str = a_xdf_file.stem
-        a_clean_filename: str = a_lab_recorder_filename.removeprefix('LabRecorder_').removesuffix('_eeg')
-        a_lab_recorder_filename_parts = a_clean_filename.split('_')
-
-        datetime_part = a_lab_recorder_filename_parts[-1] if len(a_lab_recorder_filename_parts) > 0 else ""
-        if len(a_lab_recorder_filename_parts) > 2:
-            hostname_parts = '_'.join(a_lab_recorder_filename_parts[:-1])
-            print(f'hostname_parts: {hostname_parts} will be discarded')
-
-        export_filepaths_dict = {}
-        # For backward compatibility, return the first merged EEG Raw (primary)
-        primary_eeg_raw = merged_eeg_raws[0]
-
-        for idx, eeg_raw in enumerate(merged_eeg_raws):
-            meas_date = eeg_raw.info.get('meas_date', None)
-            if meas_date is not None:
-                base_dt_str = meas_date.strftime("%Y-%m-%dT%H-%M-%S")
-            else:
-                base_dt_str = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%S")
-
-            # Add device index suffix if there are multiple EEG datasets
-            if len(merged_eeg_raws) > 1:
-                device_suffix = f"eeg{idx}"
-                final_output_filename = f"{base_dt_str}_{device_suffix}"
-            else:
-                final_output_filename = base_dt_str
-
-            a_lab_recorder_filepath = labRecorder_PostProcessed_path.joinpath(final_output_filename).with_suffix('.fif')
-            print(f'saving finalized EEG data out to "{a_lab_recorder_filepath.as_posix()}"')
-            eeg_raw.save(a_lab_recorder_filepath, overwrite=True)
-
-            # Record per-format exports keyed by dataset index
-            export_filepaths_dict.setdefault('fif', {})[idx] = a_lab_recorder_filepath
-
-            if export_mat:
-                mat_export_folder = a_lab_recorder_filepath.parent.joinpath('mat')
-                mat_export_folder.mkdir(exist_ok=True)
-                mat_export_path = mat_export_folder.joinpath(final_output_filename).with_suffix('.mat')
-                mat_path = eeg_raw.save_to_fieldtrip_mat(mat_export_path)
-                export_filepaths_dict.setdefault('mat', {})[idx] = mat_path
-
-        return primary_eeg_raw, export_filepaths_dict
-    
 
     @classmethod
     def load_and_process_all(cls, lab_recorder_output_path: Path, 
@@ -1117,6 +1057,87 @@ class LabRecorderXDF:
         return _out_eeg_raw, _out_xdf_stream_infos_df, lab_recorder_xdf_files
 
 
+    # ==================================================================================================================================================================================================================================================================================== #
+    # Export/Saving Methods                                                                                                                                                                                                                                                                #
+    # ==================================================================================================================================================================================================================================================================================== #
+
+    @classmethod
+    def save_post_processed_to_fif(cls, raws_dict, a_xdf_file: Path, labRecorder_PostProcessed_path: Path, export_mat: bool=True):
+        """ 
+
+        eeg_raw, a_lab_recorder_filepath = LabRecorderXDF.save_post_processed_to_fif(
+            raws_dict=raws_dict,
+            a_xdf_file=a_xdf_file,
+            labRecorder_PostProcessed_path=sso.eeg_analyzed_parent_export_path.joinpath(f'LabRecorder_PostProcessed'),
+        )
+
+        LabRecorder_Apogee_2025-09-18T15-18-39
+        LabRecorder_2025-09-19T02-22-10.mat
+        
+                 
+        
+        """
+        ## When done processing the entire LabRecorder.xdf, save EEG data (with all
+        ## annotations and such added) to new files. Supports multiple EEG devices
+        ## per XDF by writing one output per merged EEG dataset.
+        eeg_raws = raws_dict.get(DataModalityType.EEG.value, [])
+        if len(eeg_raws) == 0:
+            print(f'WARN: save_post_processed_to_fif found no EEG streams in "{a_xdf_file.as_posix()}". Skipping.')
+            return None, None
+
+        # Merge streams by device (one Raw per physical device)
+        merged_eeg_raws, merge_meta = cls.merge_eeg_streams_by_device(
+            eeg_raws=eeg_raws, strict_merge=False, debug_print=False
+        )
+        if len(merged_eeg_raws) == 0:
+            print(f'WARN: save_post_processed_to_fif could not produce any merged EEG datasets for "{a_xdf_file.as_posix()}". Skipping.')
+            return None, None
+
+        labRecorder_PostProcessed_path.mkdir(exist_ok=True)
+
+        a_lab_recorder_filename: str = a_xdf_file.stem
+        a_clean_filename: str = a_lab_recorder_filename.removeprefix('LabRecorder_').removesuffix('_eeg')
+        a_lab_recorder_filename_parts = a_clean_filename.split('_')
+
+        datetime_part = a_lab_recorder_filename_parts[-1] if len(a_lab_recorder_filename_parts) > 0 else ""
+        if len(a_lab_recorder_filename_parts) > 2:
+            hostname_parts = '_'.join(a_lab_recorder_filename_parts[:-1])
+            print(f'hostname_parts: {hostname_parts} will be discarded')
+
+        export_filepaths_dict = {}
+        # For backward compatibility, return the first merged EEG Raw (primary)
+        primary_eeg_raw = merged_eeg_raws[0]
+
+        for idx, eeg_raw in enumerate(merged_eeg_raws):
+            meas_date = eeg_raw.info.get('meas_date', None)
+            if meas_date is not None:
+                base_dt_str = meas_date.strftime("%Y-%m-%dT%H-%M-%S")
+            else:
+                base_dt_str = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%S")
+
+            # Add device index suffix if there are multiple EEG datasets
+            if len(merged_eeg_raws) > 1:
+                device_suffix = f"eeg{idx}"
+                final_output_filename = f"{base_dt_str}_{device_suffix}"
+            else:
+                final_output_filename = base_dt_str
+
+            a_lab_recorder_filepath = labRecorder_PostProcessed_path.joinpath(final_output_filename).with_suffix('.fif')
+            print(f'saving finalized EEG data out to "{a_lab_recorder_filepath.as_posix()}"')
+            eeg_raw.save(a_lab_recorder_filepath, overwrite=True)
+
+            # Record per-format exports keyed by dataset index
+            export_filepaths_dict.setdefault('fif', {})[idx] = a_lab_recorder_filepath
+
+            if export_mat:
+                mat_export_folder = a_lab_recorder_filepath.parent.joinpath('mat')
+                mat_export_folder.mkdir(exist_ok=True)
+                mat_export_path = mat_export_folder.joinpath(final_output_filename).with_suffix('.mat')
+                mat_path = eeg_raw.save_to_fieldtrip_mat(mat_export_path)
+                export_filepaths_dict.setdefault('mat', {})[idx] = mat_path
+
+        return primary_eeg_raw, export_filepaths_dict
+    
 
     @classmethod
     def to_hdf(cls, active_only_out_eeg_raws, results, xdf_stream_infos_df: pd.DataFrame, file_path: Path, root_key: str='/', debug_print=True):
