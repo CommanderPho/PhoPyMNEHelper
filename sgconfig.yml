@@ -1,0 +1,6 @@
+ruleDirs:
+- C:\Users\pho\repos\EmotivEpoc\ACTIVE_DEV\PhoPyMNEHelper\rules
+testConfigs:
+- testDir: C:\Users\pho\repos\EmotivEpoc\ACTIVE_DEV\PhoPyMNEHelper\rule-tests
+utilDirs:
+- C:\Users\pho\repos\EmotivEpoc\ACTIVE_DEV\PhoPyMNEHelper\utils
