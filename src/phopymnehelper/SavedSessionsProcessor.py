@@ -23,7 +23,7 @@ from attrs import define, field
 
 # from ..EegProcessing import bandpower
 
-from phopymnehelper.analysis.computations.EEG_data import EEGData
+from phopymnehelper.EEG_data import EEGData
 from phopymnehelper.motion_data import MotionData
 from phopymnehelper.event_data import EventData
 from phopymnehelper.historical_data import HistoricalData
