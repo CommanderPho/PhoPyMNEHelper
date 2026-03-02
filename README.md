@@ -39,5 +39,7 @@ r"**/PhoPyMNEHelper\src\phopymnehelper/*.py"
 "from phoofflineeeganalysis."
 "from phopymnehelper."
 
+"from phopymnehelper.analysis.computations.EEG_data import EEGData"
+"from phopymnehelper.EEG_data import EEGData"
 
 ```
