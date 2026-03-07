@@ -1,5 +1,6 @@
 {
     "recommendations": [
-        "specstory.specstory-vscode"
+        "specstory.specstory-vscode",
+        "astral-sh.ty"
     ]
 }

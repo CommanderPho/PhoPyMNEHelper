@@ -37,7 +37,7 @@ class ElectrodeHelper:
     Stateful Electrode Positions Loading:
     
         from mne.channels.montage import DigMontage
-        from phopymnehelper.analysis.anatomy_and_electrodes import ElectrodeHelper
+        from phopymnehelper.anatomy_and_electrodes import ElectrodeHelper
 
         active_electrode_man: ElectrodeHelper = ElectrodeHelper.init_EpocX_montage()
         emotiv_epocX_montage: DigMontage = active_electrode_man.active_montage
@@ -83,7 +83,7 @@ class ElectrodeHelper:
             
         Usage:
             from mne.channels.montage import DigMontage
-            from phopymnehelper.analysis.anatomy_and_electrodes import ElectrodeHelper
+            from phopymnehelper.anatomy_and_electrodes import ElectrodeHelper
 
             electrode_pos_parent_folder = Path("E:/Dropbox (Personal)/Hardware/Consumer EEG Headsets/Emotiv Epoc EEG/ElectrodeLayouts").resolve()
             electrode_positions_path = electrode_pos_parent_folder.joinpath('ElectrodePositions_2025-08-14', 'brainstorm_electrode_positions_PhoHAle_eeg_subjectspacemm.tsv')
